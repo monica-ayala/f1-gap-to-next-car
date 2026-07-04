@@ -1,151 +1,112 @@
+import os
+import warnings
+warnings.filterwarnings('ignore')
+
 import streamlit as st
+import fastf1
 import pandas as pd
-import math
-from pathlib import Path
+import matplotlib.pyplot as plt
+import numpy as np
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+# -------------------------
+# CONFIG
+# -------------------------
+st.set_page_config(page_title="F1 Gap to Car Ahead", layout="centered")
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+CACHE_DIR = "./f1_cache"
+os.makedirs(CACHE_DIR, exist_ok=True)
+fastf1.Cache.enable_cache(CACHE_DIR)
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+CURRENT_YEAR = 2026
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+# -------------------------
+# MAIN
+# -------------------------
+def compute_gap_by_position(session, driver):
+    laps = session.laps
+    driver_laps = laps.pick_driver(driver).copy()
+    driver_laps = driver_laps.sort_values('LapNumber')
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+    rows = []
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+    for _, lap in driver_laps.iterrows():
+        lap_num = lap['LapNumber']
+        position = lap['Position']
+        lap_time_abs = lap['Time']
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+        if pd.isna(position) or pd.isna(lap_time_abs):
+            continue
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
-
-    return gdp_df
-
-gdp_df = get_gdp_data()
-
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
+        if position <= 1:
+            gap = 0.0
         else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
+            # find car ahead
+            same_lap = laps[laps['LapNumber'] == lap_num]
+            ahead = same_lap[same_lap['Position'] == position - 1]
 
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+            if ahead.empty:
+                continue
+
+            ahead_time = ahead.iloc[0]['Time']
+            gap = (lap_time_abs - ahead_time).total_seconds()
+
+        rows.append({
+            "Lap": lap_num,
+            "Gap": gap
+        })
+
+    return pd.DataFrame(rows)
+
+
+# -------------------------
+# UI
+# -------------------------
+st.title("🏎️ Gap to Car Ahead Visualizer")
+
+year = st.selectbox("Year", list(range(2018, CURRENT_YEAR + 1))[::-1])
+
+# Load events
+@st.cache_data
+def load_schedule(year):
+    return fastf1.get_event_schedule(year, include_testing=False)
+
+schedule = load_schedule(year)
+
+event_names = {
+    f"Rd {int(row['RoundNumber'])} - {row['EventName']}": int(row['RoundNumber'])
+    for _, row in schedule.iterrows()
+}
+
+event_label = st.selectbox("Event", list(event_names.keys()))
+event_round = event_names[event_label]
+
+session_type = st.selectbox("Session", ["R", "S"])  # Race or Sprint
+
+# Load session
+@st.cache_data
+def load_session(year, rnd, session_type):
+    session = fastf1.get_session(year, rnd, session_type)
+    session.load()
+    return session
+
+if st.button("Load Session"):
+    with st.spinner("Loading session data..."):
+        session = load_session(year, event_round, session_type)
+
+    drivers = sorted(session.laps['Driver'].unique())
+    driver = st.selectbox("Driver", drivers)
+
+    if st.button("Generate Plot"):
+        df = compute_gap_by_position(session, driver)
+
+        if df.empty:
+            st.warning("No data available.")
+        else:
+            fig, ax = plt.subplots()
+            ax.plot(df["Lap"], df["Gap"])
+            ax.set_title(f"{driver} - Gap to Car Ahead")
+            ax.set_xlabel("Lap")
+            ax.set_ylabel("Gap (s)")
+            ax.grid(True)
+
+            st.pyplot(fig)
