@@ -6,41 +6,19 @@ import streamlit as st
 import fastf1
 import pandas as pd
 import matplotlib.pyplot as plt
+import numpy as np
 
 # -------------------------
-# PAGE CONFIG
+# CONFIG
 # -------------------------
-st.set_page_config(
-    page_title="F1 Gap to Car Ahead",
-    layout="centered"
-)
+st.set_page_config(page_title="F1 Gap to Car Ahead", layout="centered")
 
-st.markdown("""
-    <style>
-        body {
-            background-color: #0e1117;
-            color: #ffffff;
-        }
-        .stApp {
-            background-color: #0e1117;
-        }
-        h1, h2, h3 {
-            color: #e10600;
-        }
-    </style>
-""", unsafe_allow_html=True)
-
-# -------------------------
-# FASTF1 CACHE
-# -------------------------
 CACHE_DIR = "./f1_cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
 fastf1.Cache.enable_cache(CACHE_DIR)
 
 CURRENT_YEAR = 2026
 
-# -------------------------
-# FUNCTIONS
 # -------------------------
 def compute_gap_by_position(session, driver):
     laps = session.laps
@@ -76,27 +54,15 @@ def compute_gap_by_position(session, driver):
 
     return pd.DataFrame(rows)
 
+st.title("🏎️ Gap to Car Ahead Visualizer")
 
+year = st.selectbox("Year", list(range(2018, CURRENT_YEAR + 1))[::-1])
+
+# Load events
 @st.cache_data
 def load_schedule(year):
     return fastf1.get_event_schedule(year, include_testing=False)
 
-
-@st.cache_data
-def load_session(year, rnd, session_type):
-    session = fastf1.get_session(year, rnd, session_type)
-    session.load()
-    return session
-
-st.title("🏎️ Gap to Car Ahead")
-
-# YEAR
-year = st.selectbox(
-    "Season",
-    list(range(2018, CURRENT_YEAR + 1))[::-1]
-)
-
-# EVENT
 schedule = load_schedule(year)
 
 event_names = {
@@ -104,53 +70,48 @@ event_names = {
     for _, row in schedule.iterrows()
 }
 
-event_label = st.selectbox("Grand Prix", list(event_names.keys()))
+event_label = st.selectbox("Event", list(event_names.keys()))
 event_round = event_names[event_label]
 
-# SESSION
-session_type = st.selectbox(
-    "Session",
-    {
-        "Race": "R",
-        "Sprint": "S"
-    }
-)
+session_type = st.selectbox("Session", ["R", "S"])  # Race or Sprint
 
-# LOAD SESSION (auto)
-with st.spinner("Loading session data..."):
-    session = load_session(year, event_round, session_type)
+# Load session
+@st.cache_data
+def load_session(year, rnd, session_type):
+    session = fastf1.get_session(year, rnd, session_type)
+    session.load()
+    return session
 
-drivers = sorted(session.laps['Driver'].unique())
-driver = st.selectbox("Driver", drivers)
+if "session_obj" not in st.session_state:
+    st.session_state.session_obj = None
+if "session_key" not in st.session_state:
+    st.session_state.session_key = None
 
-try:
-    driver_info = session.get_driver(driver)
-    team_color = f"#{driver_info['TeamColor']}"
-except:
-    team_color = "#ffffff"
+current_key = (year, event_round, session_type)
 
-df = compute_gap_by_position(session, driver)
+if st.button("Load Session"):
+    with st.spinner("Loading session data..."):
+        st.session_state.session_obj = load_session(year, event_round, session_type)
+        st.session_state.session_key = current_key
 
-if df.empty:
-    st.warning("No data available.")
-else:
-    fig, ax = plt.subplots()
+if st.session_state.session_obj is not None and st.session_state.session_key == current_key:
+    session = st.session_state.session_obj
+    drivers = sorted(session.laps['Driver'].unique())
+    driver = st.selectbox("Driver", drivers)
 
-    ax.plot(
-        df["Lap"],
-        df["Gap"],
-        color=team_color,
-        linewidth=2
-    )
+    if st.button("Generate Plot"):
+        df = compute_gap_by_position(session, driver)
 
-    ax.set_title(f"{driver} — Gap to Car Ahead", color="white")
-    ax.set_xlabel("Lap", color="white")
-    ax.set_ylabel("Gap (s)", color="white")
+        if df.empty:
+            st.warning("No data available.")
+        else:
+            fig, ax = plt.subplots()
+            ax.plot(df["Lap"], df["Gap"])
+            ax.set_title(f"{driver} - Gap to Car Ahead")
+            ax.set_xlabel("Lap")
+            ax.set_ylabel("Gap (s)")
+            ax.grid(True)
 
-    ax.grid(True, alpha=0.3)
-
-    fig.patch.set_facecolor('#0e1117')
-    ax.set_facecolor('#0e1117')
-    ax.tick_params(colors='white')
-
-    st.pyplot(fig)
+            st.pyplot(fig)
+elif st.session_state.session_obj is not None and st.session_state.session_key != current_key:
+    st.info("Year/Event/Session changed — click **Load Session** again to load the new selection.")
