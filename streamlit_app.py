@@ -5,12 +5,9 @@ warnings.filterwarnings('ignore')
 import streamlit as st
 import fastf1
 import pandas as pd
-import matplotlib.pyplot as plt
 import numpy as np
+import plotly.graph_objects as go
 
-# -------------------------
-# CONFIG
-# -------------------------
 st.set_page_config(page_title="F1 Gap to Car Ahead", layout="centered")
 
 CACHE_DIR = "./f1_cache"
@@ -19,7 +16,6 @@ fastf1.Cache.enable_cache(CACHE_DIR)
 
 CURRENT_YEAR = 2026
 
-# -------------------------
 def compute_gap_by_position(session, driver):
     laps = session.laps
     driver_laps = laps.pick_driver(driver).copy()
@@ -58,7 +54,6 @@ st.title("🏎️ Gap to Car Ahead Visualizer")
 
 year = st.selectbox("Year", list(range(2018, CURRENT_YEAR + 1))[::-1])
 
-# Load events
 @st.cache_data
 def load_schedule(year):
     return fastf1.get_event_schedule(year, include_testing=False)
@@ -73,9 +68,8 @@ event_names = {
 event_label = st.selectbox("Event", list(event_names.keys()))
 event_round = event_names[event_label]
 
-session_type = st.selectbox("Session", ["R", "S"])  # Race or Sprint
+session_type = st.selectbox("Session", ["R", "S"])  
 
-# Load session
 @st.cache_data
 def load_session(year, rnd, session_type):
     session = fastf1.get_session(year, rnd, session_type)
@@ -105,13 +99,31 @@ if st.session_state.session_obj is not None and st.session_state.session_key == 
         if df.empty:
             st.warning("No data available.")
         else:
-            fig, ax = plt.subplots()
-            ax.plot(df["Lap"], df["Gap"])
-            ax.set_title(f"{driver} - Gap to Car Ahead")
-            ax.set_xlabel("Lap")
-            ax.set_ylabel("Gap (s)")
-            ax.grid(True)
+            fig = go.Figure()
 
-            st.pyplot(fig)
+            fig.add_trace(go.Scatter(
+                x=df["Lap"],
+                y=df["Gap"],
+                mode="lines+markers",
+                line=dict(color="#E10600", width=3), 
+                marker=dict(size=5, color="#E10600"),
+                fill="tozeroy",
+                fillcolor="rgba(225, 6, 0, 0.15)",
+                hovertemplate="Lap %{x}<br>Gap: %{y:.3f} s<extra></extra>",
+            ))
+
+            fig.update_layout(
+                title=dict(text=f"{driver} — Gap to Car Ahead", font=dict(size=22)),
+                xaxis_title="Lap",
+                yaxis_title="Gap (s)",
+                template="plotly_white",
+                hovermode="x unified",
+                margin=dict(l=40, r=20, t=60, b=40),
+                font=dict(family="Arial, sans-serif", size=13),
+            )
+            fig.update_xaxes(showgrid=True, gridcolor="rgba(0,0,0,0.08)")
+            fig.update_yaxes(showgrid=True, gridcolor="rgba(0,0,0,0.08)")
+
+            st.plotly_chart(fig, use_container_width=True)
 elif st.session_state.session_obj is not None and st.session_state.session_key != current_key:
     st.info("Year/Event/Session changed — click **Load Session** again to load the new selection.")
